@@ -55,7 +55,7 @@ def init_db():
     """Initialize database"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    
+
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE NOT NULL,
@@ -72,6 +72,18 @@ def init_db():
                   results_file TEXT,
                   status TEXT DEFAULT 'processing',
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+
+    # Ensure new columns exist for older installations
+    def ensure_column(table, column, definition):
+        c.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in c.fetchall()]
+        if column not in columns:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    ensure_column('check_history', 'parameters', 'TEXT')
+    ensure_column('check_history', 'results', 'TEXT')
+    ensure_column('check_history', 'results_file', 'TEXT')
+    ensure_column('check_history', 'status', "TEXT DEFAULT 'processing'")
     
     # Create default users
     c.execute("SELECT * FROM users WHERE username = 'admin'")
