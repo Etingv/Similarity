@@ -570,7 +570,65 @@
             font-size: 12px;
             color: #666;
         }
-        
+
+        .experiments-panel {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            margin-bottom: 30px;
+        }
+
+        .experiments-panel h3 {
+            margin-bottom: 15px;
+            font-size: 20px;
+            color: var(--dark);
+        }
+
+        .experiment-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .experiment-tag {
+            background: var(--light);
+            border: 1px solid var(--border);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--secondary);
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .experiment-empty {
+            color: #999;
+            font-size: 13px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .error-text {
+            color: var(--danger);
+            font-size: 13px;
+            margin-top: 5px;
+            display: none;
+        }
+
+        .modal .error-text {
+            display: block;
+            min-height: 18px;
+        }
+
+        .form-hint {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
         .file-manager {
             display: none;
         }
@@ -723,7 +781,14 @@
                         <div class="label">different types</div>
                     </div>
                 </div>
-                
+
+                <div class="experiments-panel">
+                    <h3>Available Experiments</h3>
+                    <div class="experiment-tags" id="experimentsList">
+                        <span class="experiment-empty">No experiments in the library yet</span>
+                    </div>
+                </div>
+
                 <h3 style="margin: 30px 0 20px;">Archive Database by Academic Year</h3>
                 <div class="archives-grid" id="archivesGrid"></div>
             </section>
@@ -784,9 +849,10 @@
                 <div id="resultsSection" style="display: none;">
                     <h3 style="margin: 30px 0 20px;">Check Results</h3>
                     <div style="margin-bottom: 20px;">
-                        <button class="btn btn-success" id="downloadResultsBtn">
+                        <button class="btn btn-success" id="downloadResultsBtn" disabled>
                             📥 Download Results
                         </button>
+                        <p class="form-hint" id="resultsHint" style="margin-top: 8px;">The archive includes the compare.py report and highlighted files.</p>
                     </div>
                     <div class="results-table">
                         <table>
@@ -887,11 +953,9 @@
                 </div>
                 <div class="form-group">
                     <label>Academic Year</label>
-                    <select id="academicYear">
-                        <option value="2023-2024">2023-2024</option>
-                        <option value="2024-2025" selected>2024-2025</option>
-                        <option value="2025-2026">2025-2026</option>
-                    </select>
+                    <select id="academicYear"></select>
+                    <input type="text" id="customAcademicYear" class="hidden" placeholder="Enter year, e.g. 2024-2025">
+                    <p class="form-hint">Select an existing academic year or choose “Other” to type a new one.</p>
                 </div>
                 <div class="form-group">
                     <label>Semester</label>
@@ -902,11 +966,11 @@
                 </div>
                 <div class="form-group">
                     <label>Experiment</label>
-                    <select id="experimentType">
-                        <option value="">-- Select from existing or enter new --</option>
-                    </select>
-                    <input type="text" id="newExperiment" placeholder="Or enter new experiment name" style="margin-top: 10px;">
+                    <select id="experimentType"></select>
+                    <input type="text" id="customExperiment" class="hidden" placeholder="Enter experiment code">
+                    <p class="form-hint">Letters, numbers and “-” only. Existing experiments are pre-filled.</p>
                 </div>
+                <p id="renameError" class="error-text"></p>
                 <div class="form-group">
                     <label>New filename:</label>
                     <p id="newFilename" style="font-weight: bold; color: var(--primary);"></p>
@@ -926,6 +990,7 @@
                 <h2 class="modal-title" id="userModalTitle">Add User</h2>
             </div>
             <div class="modal-body">
+                <p id="userModalError" class="error-text"></p>
                 <div class="form-group">
                     <label>Username</label>
                     <input type="text" id="userUsername" required>
@@ -954,7 +1019,11 @@
         let currentCheckId = null;
         let uploadedFiles = [];
         let availableExperiments = [];
+        let availableAcademicYears = [];
+        let yearCodeMap = {};
         let pendingFile = null;
+        let userModalMode = 'create';
+        let editingUserId = null;
         
         // Check saved session
         function checkSession() {
@@ -1059,91 +1128,309 @@
             try {
                 const response = await fetch('/archives/info');
                 const data = await response.json();
-                
+
                 if (data.success && data.info) {
                     const info = data.info;
-                    
-                    // Extract unique experiments
-                    const experiments = new Set();
-                    info.archives.forEach(archive => {
-                        const match = archive.name.match(/_([^.]+)\./);
-                        if (match) experiments.add(match[1]);
-                    });
-                    availableExperiments = Array.from(experiments);
-                    
-                    // Update stats
-                    document.getElementById('totalArchives').textContent = info.total_archives;
-                    document.getElementById('totalYears').textContent = Object.keys(info.by_year).length;
+
+                    availableExperiments = Array.isArray(info.experiments) ? info.experiments.slice().sort() : [];
+                    availableAcademicYears = Array.isArray(info.available_years) ? info.available_years.slice().sort() : [];
+                    yearCodeMap = info.year_codes || {};
+
+                    document.getElementById('totalArchives').textContent = info.total_archives || 0;
+                    const yearsCount = Object.keys(info.by_year || {}).filter(year => year && year !== 'unknown').length;
+                    document.getElementById('totalYears').textContent = yearsCount;
                     document.getElementById('totalExperiments').textContent = availableExperiments.length;
-                    
-                    // Display archives by year
+
+                    const experimentsList = document.getElementById('experimentsList');
+                    experimentsList.innerHTML = '';
+                    if (availableExperiments.length === 0) {
+                        experimentsList.innerHTML = '<span class="experiment-empty">No experiments in the library yet</span>';
+                    } else {
+                        availableExperiments.forEach(exp => {
+                            const badge = document.createElement('span');
+                            badge.className = 'experiment-tag';
+                            badge.textContent = exp;
+                            experimentsList.appendChild(badge);
+                        });
+                    }
+
                     const grid = document.getElementById('archivesGrid');
                     grid.innerHTML = '';
-                    
-                    // Convert year format and group properly
+
                     const yearGroups = {};
-                    info.archives.forEach(archive => {
-                        let academicYear;
-                        const yearMatch = archive.name.match(/^(\d+)\./);
-                        if (yearMatch) {
-                            const yearCode = yearMatch[1];
-                            if (yearCode.length === 4) {
-                                // Format: 2024.01 -> 2024-2025
-                                academicYear = `${yearCode}-${parseInt(yearCode) + 1}`;
-                            } else if (yearCode.length === 4 && yearCode.startsWith('24')) {
-                                // Format: 2425.01 -> 2024-2025
-                                academicYear = `20${yearCode.slice(0,2)}-20${yearCode.slice(2)}`;
-                            }
+                    (info.archives || []).forEach(archive => {
+                        const year = archive.year && archive.year !== 'unknown' ? archive.year : 'Unclassified';
+                        if (!yearGroups[year]) {
+                            yearGroups[year] = [];
                         }
-                        
-                        if (!yearGroups[academicYear]) {
-                            yearGroups[academicYear] = [];
-                        }
-                        yearGroups[academicYear].push(archive);
+                        yearGroups[year].push(archive);
                     });
-                    
-                    // Display by academic year
-                    Object.keys(yearGroups).sort().reverse().forEach(year => {
+
+                    const sortedYears = Object.keys(yearGroups).sort((a, b) => {
+                        if (a === 'Unclassified') return 1;
+                        if (b === 'Unclassified') return -1;
+                        const aStart = parseInt(normaliseAcademicYearLabel(a).slice(0, 4), 10);
+                        const bStart = parseInt(normaliseAcademicYearLabel(b).slice(0, 4), 10);
+                        if (isNaN(aStart) || isNaN(bStart)) {
+                            return a.localeCompare(b);
+                        }
+                        return bStart - aStart;
+                    });
+
+                    if (sortedYears.length === 0) {
+                        grid.innerHTML = '<p class="experiment-empty">No archives in the library yet.</p>';
+                    }
+
+                    sortedYears.forEach(year => {
+                        const archives = yearGroups[year];
+                        const experiments = Array.from(new Set(archives.map(a => a.experiment))).sort();
                         const yearDiv = document.createElement('div');
                         yearDiv.className = 'archive-year';
-                        
-                        const archives = yearGroups[year];
-                        const experiments = new Set(archives.map(a => {
-                            const m = a.name.match(/_([^.]+)\./);
-                            return m ? m[1] : 'unknown';
-                        }));
-                        
+
                         yearDiv.innerHTML = `
-                            <h3>${year} Academic Year</h3>
-                            <p style="color: #666; margin-bottom: 15px;">
-                                ${archives.length} archives, ${experiments.size} experiments
-                            </p>
+                            <h3>${year === 'Unclassified' ? 'Unclassified Archives' : `${year} Academic Year`}</h3>
+                            <div class="experiment-tags" style="margin-bottom: 15px;">
+                                ${experiments.length ? experiments.map(exp => `<span class="experiment-tag">${exp}</span>`).join('') : '<span class="experiment-empty">No experiments listed</span>'}
+                            </div>
                             <div class="archive-list">
                                 ${archives.map(a => `
                                     <div class="archive-item">
                                         <div>
                                             <div class="archive-name">${a.name}</div>
                                             <div class="archive-info">
-                                                Size: ${(a.size / 1024 / 1024).toFixed(2)} MB
+                                                Size: ${(a.size / 1024 / 1024).toFixed(2)} MB${a.year_code ? ` · Code: ${a.year_code}` : ''}
                                             </div>
                                         </div>
                                     </div>
                                 `).join('')}
                             </div>
                         `;
-                        
+
                         grid.appendChild(yearDiv);
                     });
+
+                    updateRenameSelectors();
                 }
             } catch (error) {
                 console.error('Error loading dashboard:', error);
             }
         }
-        
+
+        function getSuggestedAcademicYears() {
+            const suggestions = new Set(availableAcademicYears.filter(Boolean));
+            const now = new Date();
+            const month = now.getMonth();
+            const currentStart = month >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+            suggestions.add(`${currentStart}-${currentStart + 1}`);
+            suggestions.add(`${currentStart + 1}-${currentStart + 2}`);
+            return Array.from(suggestions).sort();
+        }
+
+        function updateRenameSelectors() {
+            const yearSelect = document.getElementById('academicYear');
+            const experimentSelect = document.getElementById('experimentType');
+            if (!yearSelect || !experimentSelect) {
+                return;
+            }
+
+            const yearOptions = getSuggestedAcademicYears();
+            yearSelect.innerHTML = '';
+
+            if (yearOptions.length) {
+                yearOptions.forEach(year => {
+                    const option = document.createElement('option');
+                    option.value = year;
+                    option.textContent = year;
+                    yearSelect.appendChild(option);
+                });
+            } else {
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = '-- Select --';
+                yearSelect.appendChild(placeholder);
+            }
+
+            const customYearOption = document.createElement('option');
+            customYearOption.value = '__custom__';
+            customYearOption.textContent = 'Other…';
+            yearSelect.appendChild(customYearOption);
+
+            if (yearOptions.length) {
+                yearSelect.value = yearOptions[0];
+                toggleCustomAcademicYear(false);
+            } else {
+                yearSelect.value = '__custom__';
+                toggleCustomAcademicYear(true);
+            }
+
+            experimentSelect.innerHTML = '';
+            if (availableExperiments.length) {
+                availableExperiments.forEach(exp => {
+                    const option = document.createElement('option');
+                    option.value = exp;
+                    option.textContent = exp;
+                    experimentSelect.appendChild(option);
+                });
+            }
+            const customExperimentOption = document.createElement('option');
+            customExperimentOption.value = '__custom__';
+            customExperimentOption.textContent = 'Other…';
+            experimentSelect.appendChild(customExperimentOption);
+
+            if (availableExperiments.length) {
+                experimentSelect.value = availableExperiments[0];
+                toggleCustomExperiment(false);
+            } else {
+                experimentSelect.value = '__custom__';
+                toggleCustomExperiment(true);
+            }
+
+            document.getElementById('customAcademicYear').value = '';
+            document.getElementById('customExperiment').value = '';
+
+            updateNewFilename();
+        }
+
+        function normaliseAcademicYearLabel(label) {
+            if (!label) {
+                return '';
+            }
+            const trimmed = label.trim();
+            const digits = trimmed.replace(/[^0-9]/g, '');
+
+            if (digits.length >= 8) {
+                const start = digits.slice(0, 4);
+                const end = digits.slice(-4);
+                return `${start}-${end}`;
+            }
+
+            if (digits.length === 4) {
+                if (digits.startsWith('19') || digits.startsWith('20')) {
+                    const start = digits;
+                    return `${start}-${parseInt(start, 10) + 1}`;
+                }
+                const start = `20${digits.slice(0, 2)}`;
+                const end = `20${digits.slice(2)}`;
+                return `${start}-${end}`;
+            }
+
+            if (digits.length === 2) {
+                const start = `20${digits}`;
+                return `${start}-${parseInt(start, 10) + 1}`;
+            }
+
+            return trimmed;
+        }
+
+        function toggleCustomAcademicYear(show) {
+            const input = document.getElementById('customAcademicYear');
+            if (!input) return;
+            if (show) {
+                input.classList.remove('hidden');
+                input.focus();
+            } else {
+                input.classList.add('hidden');
+                input.value = '';
+            }
+        }
+
+        function toggleCustomExperiment(show) {
+            const input = document.getElementById('customExperiment');
+            if (!input) return;
+            if (show) {
+                input.classList.remove('hidden');
+                input.focus();
+            } else {
+                input.classList.add('hidden');
+                input.value = '';
+            }
+        }
+
+        function sanitizeExperimentName(value) {
+            return value.trim().replace(/\s+/g, '-').replace(/[^A-Za-z0-9-]/g, '');
+        }
+
+        function getAcademicYearLabel() {
+            const select = document.getElementById('academicYear');
+            if (!select) return '';
+            if (select.value === '__custom__') {
+                return normaliseAcademicYearLabel(document.getElementById('customAcademicYear').value);
+            }
+            return normaliseAcademicYearLabel(select.value);
+        }
+
+        function getYearCodeForLabel(label) {
+            if (!label) {
+                return '';
+            }
+            const normalisedLabel = normaliseAcademicYearLabel(label);
+            if (yearCodeMap && yearCodeMap[normalisedLabel]) {
+                return yearCodeMap[normalisedLabel];
+            }
+            if (yearCodeMap && yearCodeMap[label]) {
+                return yearCodeMap[label];
+            }
+            const digits = normalisedLabel.replace(/[^0-9]/g, '');
+            if (digits.length >= 8) {
+                return digits.slice(0, 4);
+            }
+            if (digits.length === 4) {
+                if (digits.startsWith('19') || digits.startsWith('20')) {
+                    return digits;
+                }
+                return `20${digits.slice(0, 2)}`;
+            }
+            if (digits.length === 2) {
+                return `20${digits}`;
+            }
+            return '';
+        }
+
+        function showRenameError(message) {
+            const errorEl = document.getElementById('renameError');
+            if (!errorEl) return;
+            errorEl.textContent = message || '';
+            errorEl.style.display = message ? 'block' : 'none';
+        }
+
+        function updateNewFilename() {
+            const semester = document.getElementById('semester').value;
+            const experimentSelect = document.getElementById('experimentType');
+            const customExperimentInput = document.getElementById('customExperiment');
+
+            let experiment = '';
+            if (experimentSelect.value === '__custom__') {
+                experiment = sanitizeExperimentName(customExperimentInput.value);
+            } else {
+                experiment = experimentSelect.value;
+            }
+
+            const yearLabel = getAcademicYearLabel();
+            const yearCode = getYearCodeForLabel(yearLabel);
+
+            const filename = yearCode && semester && experiment
+                ? `${yearCode}.${semester}_${experiment}.zip`
+                : '—';
+
+            document.getElementById('newFilename').textContent = filename;
+            if (filename !== '—') {
+                showRenameError('');
+            }
+        }
+
+        function closeRenameModal() {
+            const modal = document.getElementById('renameModal');
+            modal.classList.remove('active');
+            document.getElementById('customAcademicYear').value = '';
+            document.getElementById('customExperiment').value = '';
+            showRenameError('');
+            pendingFile = null;
+        }
+
         // File upload handling
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
-        
+
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
             uploadArea.classList.add('dragover');
@@ -1158,90 +1445,118 @@
             uploadArea.classList.remove('dragover');
             handleFiles(e.dataTransfer.files);
         });
-        
+
         fileInput.addEventListener('change', (e) => {
             handleFiles(e.target.files);
+            e.target.value = '';
         });
-        
-        function handleFiles(files) {
-            Array.from(files).forEach(file => {
-                if (!file.name.endsWith('.zip')) {
+
+        async function handleFiles(files) {
+            for (const file of Array.from(files)) {
+                if (!file.name.toLowerCase().endsWith('.zip')) {
                     alert('Please upload only ZIP files');
-                    return;
+                    continue;
                 }
-                
-                // Check filename format
-                const validFormat = /^\d{4}\.\d{2}_[^.]+\.zip$/;
-                const shortFormat = /^\d{4}\.\d{2}_[^.]+\.zip$/; // e.g., 2425.01_
-                
-                if (!validFormat.test(file.name) && !shortFormat.test(file.name)) {
-                    showRenameModal(file);
-                } else {
-                    uploadFile(file);
+
+                try {
+                    const response = await fetch('/validate_filename', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filename: file.name })
+                    });
+                    const validation = await response.json();
+
+                    if (validation.success && validation.valid) {
+                        uploadFile(file);
+                    } else if (validation.success) {
+                        if (Array.isArray(validation.available_experiments)) {
+                            availableExperiments = validation.available_experiments.slice().sort();
+                        }
+                        if (Array.isArray(validation.available_years)) {
+                            availableAcademicYears = validation.available_years.slice().sort();
+                        }
+                        if (validation.year_codes) {
+                            yearCodeMap = validation.year_codes;
+                        }
+                        showRenameModal(file);
+                    } else {
+                        alert('Unable to validate filename. Please try again.');
+                    }
+                } catch (error) {
+                    console.error('Validation error:', error);
+                    alert('Unable to validate filename. Please try again.');
                 }
-            });
+            }
         }
-        
+
         function showRenameModal(file) {
             pendingFile = file;
             const modal = document.getElementById('renameModal');
             document.getElementById('currentFilename').textContent = file.name;
-            
-            // Populate experiments dropdown
-            const select = document.getElementById('experimentType');
-            select.innerHTML = '<option value="">-- Select from existing or enter new --</option>';
-            availableExperiments.forEach(exp => {
-                select.innerHTML += `<option value="${exp}">${exp}</option>`;
-            });
-            
-            updateNewFilename();
+            showRenameError('');
+            updateRenameSelectors();
             modal.classList.add('active');
         }
-        
-        function updateNewFilename() {
-            const year = document.getElementById('academicYear').value;
-            const sem = document.getElementById('semester').value;
-            const exp = document.getElementById('experimentType').value || 
-                       document.getElementById('newExperiment').value || 
-                       'experiment';
-            
-            const yearCode = year.slice(-4); // 2024-2025 -> 2425
-            const filename = `${yearCode.slice(0,2)}${year.slice(-2)}.${sem}_${exp}.zip`;
-            document.getElementById('newFilename').textContent = filename;
-        }
-        
-        document.getElementById('academicYear').addEventListener('change', updateNewFilename);
+
+        document.getElementById('academicYear').addEventListener('change', (e) => {
+            toggleCustomAcademicYear(e.target.value === '__custom__');
+            updateNewFilename();
+        });
+        document.getElementById('customAcademicYear').addEventListener('input', updateNewFilename);
         document.getElementById('semester').addEventListener('change', updateNewFilename);
-        document.getElementById('experimentType').addEventListener('change', updateNewFilename);
-        document.getElementById('newExperiment').addEventListener('input', updateNewFilename);
-        
+        document.getElementById('experimentType').addEventListener('change', (e) => {
+            toggleCustomExperiment(e.target.value === '__custom__');
+            updateNewFilename();
+        });
+        document.getElementById('customExperiment').addEventListener('input', updateNewFilename);
+
         document.getElementById('confirmRenameBtn').addEventListener('click', () => {
             if (pendingFile) {
-                const year = document.getElementById('academicYear').value;
+                const yearLabel = getAcademicYearLabel();
                 const sem = document.getElementById('semester').value;
-                const exp = document.getElementById('experimentType').value || 
-                           document.getElementById('newExperiment').value;
-                
-                if (!exp) {
-                    alert('Please select or enter an experiment name');
+                const experimentSelect = document.getElementById('experimentType');
+                const customExperimentInput = document.getElementById('customExperiment');
+
+                if (!yearLabel) {
+                    showRenameError('Please select or enter the academic year.');
                     return;
                 }
-                
-                const yearCode = year.slice(-4);
-                const newName = `${yearCode.slice(0,2)}${year.slice(-2)}.${sem}_${exp}.zip`;
-                
-                // Create renamed file
+
+                const yearCode = getYearCodeForLabel(yearLabel);
+                if (!yearCode) {
+                    showRenameError('Academic year must be in format YYYY-YYYY.');
+                    return;
+                }
+
+                let experiment = '';
+                if (experimentSelect.value === '__custom__') {
+                    experiment = sanitizeExperimentName(customExperimentInput.value);
+                    if (!experiment) {
+                        showRenameError('Please enter the experiment code.');
+                        return;
+                    }
+                    if (!availableExperiments.includes(experiment)) {
+                        availableExperiments.push(experiment);
+                        availableExperiments.sort();
+                    }
+                } else {
+                    experiment = experimentSelect.value;
+                }
+
+                const newName = `${yearCode}.${sem}_${experiment}.zip`;
                 const renamedFile = new File([pendingFile], newName, { type: pendingFile.type });
                 uploadFile(renamedFile);
-                
-                document.getElementById('renameModal').classList.remove('active');
-                pendingFile = null;
+                const normalisedYear = normaliseAcademicYearLabel(yearLabel);
+                if (!availableAcademicYears.includes(normalisedYear)) {
+                    availableAcademicYears.push(normalisedYear);
+                    availableAcademicYears.sort();
+                }
+                closeRenameModal();
             }
         });
-        
+
         document.getElementById('cancelRenameBtn').addEventListener('click', () => {
-            document.getElementById('renameModal').classList.remove('active');
-            pendingFile = null;
+            closeRenameModal();
         });
         
         async function uploadFile(file) {
@@ -1331,7 +1646,14 @@
             document.getElementById('logContainer').classList.add('active');
             document.getElementById('logContainer').innerHTML = '';
             document.getElementById('resultsSection').style.display = 'none';
-            
+            const downloadBtn = document.getElementById('downloadResultsBtn');
+            downloadBtn.disabled = true;
+            downloadBtn.onclick = null;
+            const hint = document.getElementById('resultsHint');
+            if (hint) {
+                hint.textContent = 'The archive includes the compare.py report and highlighted files.';
+            }
+
             const interval = setInterval(async () => {
                 try {
                     const response = await fetch(`/status/${currentCheckId}`);
@@ -1357,9 +1679,10 @@
                         
                         if (data.status === 'completed' || data.status === 'error') {
                             clearInterval(interval);
-                            
+
                             if (data.status === 'completed') {
                                 loadResults(currentCheckId);
+                                loadHistory();
                             } else {
                                 alert('Check failed. Please check the logs.');
                             }
@@ -1376,14 +1699,20 @@
             try {
                 const response = await fetch(`/results/${checkId}`);
                 const data = await response.json();
-                
+
                 if (data.success) {
                     displayResults(data.results);
-                    
+
                     // Enable download button
-                    document.getElementById('downloadResultsBtn').onclick = () => {
-                        downloadResults(checkId);
-                    };
+                    const downloadBtn = document.getElementById('downloadResultsBtn');
+                    if (data.results_available) {
+                        downloadBtn.disabled = false;
+                        downloadBtn.onclick = () => downloadResults(checkId);
+                    } else {
+                        downloadBtn.disabled = true;
+                        downloadBtn.onclick = null;
+                    }
+                    loadHistory();
                 }
             } catch (error) {
                 console.error('Load results error:', error);
@@ -1394,7 +1723,16 @@
             document.getElementById('resultsSection').style.display = 'block';
             const tbody = document.getElementById('resultsTable');
             tbody.innerHTML = '';
-            
+
+            const hint = document.getElementById('resultsHint');
+            if (hint) {
+                const matchCount = results.matches ? results.matches.length : 0;
+                const summary = matchCount > 0
+                    ? `${matchCount} potential match${matchCount > 1 ? 'es' : ''} found.`
+                    : 'No matches detected.';
+                hint.textContent = `${summary} The archive includes the compare.py report and highlighted files.`;
+            }
+
             if (!results.matches || results.matches.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="3" style="text-align: center;">No plagiarism detected</td></tr>';
                 return;
@@ -1440,22 +1778,23 @@
                     
                     data.history.forEach(item => {
                         const date = new Date(item.created_at).toLocaleString();
-                        const statusBadge = item.status === 'completed' ? 
+                        const statusBadge = item.status === 'completed' ?
                             '<span class="similarity-badge similarity-low">Completed</span>' :
                             '<span class="similarity-badge similarity-medium">Processing</span>';
-                        
+
+                        const viewButton = `<button class="btn btn-primary" onclick="loadResults('${item.check_id}')">View</button>`;
+                        const downloadButton = item.results_available
+                            ? `<button class="btn btn-success" style="margin-left: 8px;" onclick="downloadResults('${item.check_id}')">Download</button>`
+                            : '';
+                        const actions = item.status === 'completed' ? `${viewButton}${downloadButton}` : '-';
+
                         tbody.innerHTML += `
                             <tr>
                                 <td>${date}</td>
                                 <td>${item.filename || 'Multiple files'}</td>
                                 <td>${statusBadge}</td>
                                 <td>${item.matches || 0}</td>
-                                <td>
-                                    ${item.status === 'completed' ? 
-                                        `<button class="btn btn-primary" onclick="loadResults('${item.check_id}')">View</button>` :
-                                        '-'
-                                    }
-                                </td>
+                                <td>${actions}</td>
                             </tr>
                         `;
                     });
@@ -1470,57 +1809,140 @@
             try {
                 const response = await fetch('/admin/users');
                 const data = await response.json();
-                
+
                 if (data.success) {
                     const tbody = document.getElementById('usersTable');
                     tbody.innerHTML = '';
-                    
+
                     data.users.forEach(user => {
-                        tbody.innerHTML += `
-                            <tr>
-                                <td>${user.username}</td>
-                                <td>${user.role}</td>
-                                <td>
-                                    <button class="btn btn-secondary" onclick="editUser(${user.id}, '${user.username}', '${user.role}')">Edit</button>
-                                    ${user.username !== 'admin' ? 
-                                        `<button class="btn btn-danger" onclick="deleteUser(${user.id})">Delete</button>` :
-                                        ''
-                                    }
-                                </td>
-                            </tr>
-                        `;
+                        const row = document.createElement('tr');
+
+                        const usernameCell = document.createElement('td');
+                        usernameCell.textContent = user.username;
+                        row.appendChild(usernameCell);
+
+                        const roleCell = document.createElement('td');
+                        roleCell.textContent = user.role;
+                        row.appendChild(roleCell);
+
+                        const actionsCell = document.createElement('td');
+                        const editButton = document.createElement('button');
+                        editButton.className = 'btn btn-secondary';
+                        editButton.textContent = 'Edit';
+                        editButton.addEventListener('click', () => openUserModal('edit', user));
+                        actionsCell.appendChild(editButton);
+
+                        if (user.username !== 'admin') {
+                            const deleteButton = document.createElement('button');
+                            deleteButton.className = 'btn btn-danger';
+                            deleteButton.style.marginLeft = '8px';
+                            deleteButton.textContent = 'Delete';
+                            deleteButton.addEventListener('click', () => confirmDeleteUser(user));
+                            actionsCell.appendChild(deleteButton);
+                        }
+
+                        row.appendChild(actionsCell);
+                        tbody.appendChild(row);
                     });
                 }
             } catch (error) {
                 console.error('Load users error:', error);
             }
         }
-        
-        document.getElementById('addUserBtn').addEventListener('click', () => {
-            document.getElementById('userModalTitle').textContent = 'Add User';
-            document.getElementById('userUsername').value = '';
+
+        function showUserModalError(message) {
+            const errorEl = document.getElementById('userModalError');
+            if (!errorEl) return;
+            errorEl.textContent = message || '';
+            errorEl.style.display = message ? 'block' : 'none';
+        }
+
+        function openUserModal(mode, user) {
+            userModalMode = mode;
+            editingUserId = user.id || null;
+            document.getElementById('userModalTitle').textContent = mode === 'create' ? 'Add User' : 'Edit User';
+            document.getElementById('userUsername').value = user.username || '';
             document.getElementById('userPassword').value = '';
-            document.getElementById('userRole').value = 'teacher';
+            document.getElementById('userRole').value = user.role || 'teacher';
+            showUserModalError('');
             document.getElementById('userModal').classList.add('active');
-        });
-        
-        document.getElementById('saveUserBtn').addEventListener('click', async () => {
-            const username = document.getElementById('userUsername').value;
-            const password = document.getElementById('userPassword').value;
-            const role = document.getElementById('userRole').value;
-            
-            if (!username) {
-                alert('Username is required');
+        }
+
+        function closeUserModal() {
+            document.getElementById('userModal').classList.remove('active');
+            document.getElementById('userPassword').value = '';
+        }
+
+        async function confirmDeleteUser(user) {
+            if (!confirm(`Delete user "${user.username}"?`)) {
                 return;
             }
-            
-            // Save user logic here
-            document.getElementById('userModal').classList.remove('active');
-            loadUsers();
+            try {
+                const response = await fetch(`/admin/user/${user.id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.message || 'Unable to delete user.');
+                }
+                loadUsers();
+            } catch (error) {
+                alert(error.message || 'Unable to delete user.');
+            }
+        }
+
+        document.getElementById('addUserBtn').addEventListener('click', () => {
+            openUserModal('create', { username: '', role: 'teacher' });
         });
-        
+
+        document.getElementById('saveUserBtn').addEventListener('click', async () => {
+            const username = document.getElementById('userUsername').value.trim();
+            const password = document.getElementById('userPassword').value;
+            const role = document.getElementById('userRole').value;
+
+            if (!username) {
+                showUserModalError('Username is required.');
+                return;
+            }
+
+            if (userModalMode === 'create' && !password) {
+                showUserModalError('Password is required for a new user.');
+                return;
+            }
+
+            try {
+                const payload = { username, role };
+                if (password) {
+                    payload.password = password;
+                }
+
+                let response;
+                if (userModalMode === 'create') {
+                    response = await fetch('/admin/user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                } else {
+                    response = await fetch(`/admin/user/${editingUserId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                }
+
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.message || 'Unable to save user.');
+                }
+
+                closeUserModal();
+                loadUsers();
+            } catch (error) {
+                showUserModalError(error.message || 'Unable to save user.');
+            }
+        });
+
         document.getElementById('cancelUserBtn').addEventListener('click', () => {
-            document.getElementById('userModal').classList.remove('active');
+            closeUserModal();
         });
         
         // Library management
