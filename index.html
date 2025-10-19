@@ -1333,9 +1333,13 @@
             const digits = trimmed.replace(/[^0-9]/g, '');
 
             if (digits.length >= 8) {
-                const start = digits.slice(0, 4);
-                const end = digits.slice(-4);
-                return `${start}-${end}`;
+                const startDigits = digits.slice(0, 4);
+                const endDigits = digits.slice(-4);
+                const startYear = normaliseYearNumber(parseInt(startDigits, 10));
+                const endYear = normaliseYearNumber(parseInt(endDigits, 10), startYear);
+                if (Number.isFinite(startYear) && Number.isFinite(endYear)) {
+                    return `${startYear}-${endYear}`;
+                }
             }
 
             if (digits.length === 4) {
@@ -1343,14 +1347,18 @@
                     const start = digits;
                     return `${start}-${parseInt(start, 10) + 1}`;
                 }
-                const start = `20${digits.slice(0, 2)}`;
-                const end = `20${digits.slice(2)}`;
-                return `${start}-${end}`;
+                const startYear = normaliseYearNumber(parseInt(digits.slice(0, 2), 10));
+                const endYear = normaliseYearNumber(parseInt(digits.slice(2), 10), startYear);
+                if (Number.isFinite(startYear) && Number.isFinite(endYear)) {
+                    return `${startYear}-${endYear}`;
+                }
             }
 
             if (digits.length === 2) {
-                const start = `20${digits}`;
-                return `${start}-${parseInt(start, 10) + 1}`;
+                const startYear = normaliseYearNumber(parseInt(digits, 10));
+                if (Number.isFinite(startYear)) {
+                    return `${startYear}-${startYear + 1}`;
+                }
             }
 
             return trimmed;
