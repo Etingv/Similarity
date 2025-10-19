@@ -1199,41 +1199,6 @@
             }
         }
 
-        function normaliseYearNumber(rawValue, referenceYear) {
-            if (!Number.isFinite(rawValue)) {
-                return Number.NaN;
-            }
-
-            if (rawValue >= 1900 && rawValue <= 2100) {
-                return rawValue;
-            }
-
-            const suffix = Math.abs(rawValue) % 100;
-            const anchor = Number.isFinite(referenceYear) ? referenceYear : new Date().getFullYear();
-            const anchorCentury = anchor - (anchor % 100);
-
-            const candidates = [anchorCentury - 100, anchorCentury, anchorCentury + 100]
-                .map(base => base + suffix)
-                .filter(year => Number.isFinite(year));
-
-            if (candidates.length === 0) {
-                return anchorCentury + suffix;
-            }
-
-            let best = candidates[0];
-            let bestDistance = Math.abs(best - anchor);
-            for (let i = 1; i < candidates.length; i++) {
-                const candidate = candidates[i];
-                const distance = Math.abs(candidate - anchor);
-                if (distance < bestDistance) {
-                    best = candidate;
-                    bestDistance = distance;
-                }
-            }
-
-            return best;
-        }
-
         function computeYearRangeFromLabels(labels) {
             if (!Array.isArray(labels) || labels.length === 0) {
                 return 'N/A';
@@ -1257,10 +1222,10 @@
             let maxEnd = Number.NEGATIVE_INFINITY;
 
             ranges.forEach(rangeLabel => {
-                const years = rangeLabel.match(/\d{2,4}/g) || [];
+                const years = rangeLabel.match(/\d{4}/g) || [];
                 if (years.length >= 2) {
-                    const start = normaliseYearNumber(parseInt(years[0], 10));
-                    const end = normaliseYearNumber(parseInt(years[years.length - 1], 10), start);
+                    const start = parseInt(years[0], 10);
+                    const end = parseInt(years[1], 10);
                     if (!Number.isNaN(start) && start < minStart) {
                         minStart = start;
                     }
@@ -1268,15 +1233,12 @@
                         maxEnd = end;
                     }
                 } else if (years.length === 1) {
-                    const start = normaliseYearNumber(parseInt(years[0], 10));
+                    const start = parseInt(years[0], 10);
                     if (!Number.isNaN(start) && start < minStart) {
                         minStart = start;
                     }
-                    if (!Number.isNaN(start)) {
-                        const end = normaliseYearNumber(start + 1, start);
-                        if (!Number.isNaN(end) && end > maxEnd) {
-                            maxEnd = end;
-                        }
+                    if (!Number.isNaN(start) && start + 1 > maxEnd) {
+                        maxEnd = start + 1;
                     }
                 }
             });
