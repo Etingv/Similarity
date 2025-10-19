@@ -138,7 +138,7 @@ def parse_archive_name(filename):
         start_year = int(year_code)
         academic_year = f"{start_year}-{start_year + 1}"
     else:
-        # Interpret compact format like 2324 -> 2023-2024 or 2425 -> 2024-2025
+        # Interpret compact format like 2425 -> 2024-2025
         start = int(f"20{year_code[:2]}")
         end = int(f"20{year_code[2:]}")
         academic_year = f"{start}-{end}"
@@ -152,51 +152,16 @@ def parse_archive_name(filename):
     })
     return result
 
-
-def normalise_academic_year(label: str) -> Optional[str]:
-    """Normalise academic year labels to YYYY-YYYY format."""
-    if not label or label.lower() == 'unknown':
-        return None
-
-    cleaned = re.sub(r'[^0-9\-]', '', label)
-    if not cleaned:
-        return None
-
-    if re.match(r'^\d{4}-\d{4}$', cleaned):
-        return cleaned
-
-    digits = re.sub(r'[^0-9]', '', cleaned)
-    if len(digits) >= 8:
-        start = int(digits[:4])
-        end = int(digits[-4:])
-        return f"{start}-{end}"
-
-    if len(digits) == 4:
-        if digits.startswith(('19', '20')):
-            start = int(digits)
-            return f"{start}-{start + 1}"
-        start = int(f"20{digits[:2]}")
-        end = int(f"20{digits[2:]}")
-        return f"{start}-{end}"
-
-    if len(digits) == 2:
-        start = int(f"20{digits}")
-        return f"{start}-{start + 1}"
-
-    return None
-
 def scan_archives():
     """Scan submissions directory and collect info about archives"""
     global archives_info
     archives_info = {
         'total_archives': 0,
         'by_year': {},
+        'experiments': set(),
         'archives': [],
         'available_years': set(),
-        'year_codes': {},
-        'archive_experiments': set(),
-        'library_experiments': set(),
-        'year_range': None
+        'year_codes': {}
     }
     
     submissions_dir = Path(app.config['ARCHIVES_DIR'])
@@ -222,12 +187,8 @@ def scan_archives():
                 year_match = re.search(r'(\d{4})', archive_name)
                 if year_match:
                     year = year_match.group(1)
-                    if len(year) == 4:
-                        if year.startswith(('19', '20')):
-                            start = int(year)
-                            academic_year = f"{start}-{start + 1}"
-                        else:
-                            academic_year = f"20{year[:2]}-20{year[2:]}"
+                    if len(year) == 4 and year.startswith('24'):
+                        academic_year = f"20{year[:2]}-20{year[2:]}"
                     else:
                         academic_year = f"{year}-{int(year)+1}"
                     year_code = year
@@ -241,7 +202,7 @@ def scan_archives():
 
             # Update statistics
             archives_info['total_archives'] += 1
-            archives_info['archive_experiments'].add(experiment)
+            archives_info['experiments'].add(experiment)
             if academic_year != 'unknown':
                 archives_info['available_years'].add(academic_year)
 
@@ -273,54 +234,16 @@ def scan_archives():
         except Exception as e:
             print(f"  Error processing {zip_path}: {e}")
     
-    # Build experiment catalog from library folders (submissions/1-4)
-    for group in range(1, 5):
-        group_dir = submissions_dir / str(group)
-        if group_dir.exists() and group_dir.is_dir():
-            for experiment_dir in sorted(group_dir.iterdir()):
-                if experiment_dir.is_dir():
-                    archives_info['library_experiments'].add(experiment_dir.name)
-
     # Convert sets to lists for JSON serialization
-    archives_info['archive_experiments'] = sorted(list(archives_info['archive_experiments']))
-    archives_info['library_experiments'] = sorted(list(archives_info['library_experiments']))
-    archives_info['experiments'] = list(archives_info['library_experiments'])
-    normalised_years = set()
-    for year in archives_info['available_years']:
-        normalised = normalise_academic_year(year)
-        if normalised:
-            normalised_years.add(normalised)
-    archives_info['available_years'] = sorted(list(normalised_years))
+    archives_info['experiments'] = sorted(list(archives_info['experiments']))
+    archives_info['available_years'] = sorted(list(archives_info['available_years']))
     for year, year_data in archives_info['by_year'].items():
         year_data['experiments'] = sorted(list(year_data['experiments']))
         year_data['items'].sort()
         year_codes = sorted(list(year_data['codes']))
         year_data['codes'] = year_codes
         if year_codes:
-            normalised_year = normalise_academic_year(year) or year
-            archives_info['year_codes'][normalised_year] = year_codes[0]
-
-    # Determine academic year coverage range
-    year_pairs = []
-    for year in archives_info['available_years']:
-        if isinstance(year, str) and '-' in year:
-            parts = year.split('-')
-            try:
-                start = int(parts[0])
-                end = int(parts[1])
-                year_pairs.append((start, end))
-            except ValueError:
-                continue
-
-    if year_pairs:
-        start_year = min(pair[0] for pair in year_pairs)
-        latest_start_year = max(pair[0] for pair in year_pairs)
-        latest_end_year = max(pair[1] for pair in year_pairs)
-        archives_info['year_range'] = {
-            'start': start_year,
-            'end': latest_start_year,
-            'end_academic': latest_end_year
-        }
+            archives_info['year_codes'][year] = year_codes[0]
 
     print(f"Total: {archives_info['total_archives']} archives")
     return archives_info
