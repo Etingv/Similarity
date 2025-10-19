@@ -157,12 +157,10 @@ def scan_archives():
     archives_info = {
         'total_archives': 0,
         'by_year': {},
+        'experiments': set(),
         'archives': [],
         'available_years': set(),
-        'year_codes': {},
-        'archive_experiments': set(),
-        'library_experiments': set(),
-        'year_range': None
+        'year_codes': {}
     }
     
     submissions_dir = Path(app.config['ARCHIVES_DIR'])
@@ -203,7 +201,7 @@ def scan_archives():
 
             # Update statistics
             archives_info['total_archives'] += 1
-            archives_info['archive_experiments'].add(experiment)
+            archives_info['experiments'].add(experiment)
             if academic_year != 'unknown':
                 archives_info['available_years'].add(academic_year)
 
@@ -235,18 +233,8 @@ def scan_archives():
         except Exception as e:
             print(f"  Error processing {zip_path}: {e}")
     
-    # Build experiment catalog from library folders (submissions/1-4)
-    for group in range(1, 5):
-        group_dir = submissions_dir / str(group)
-        if group_dir.exists() and group_dir.is_dir():
-            for experiment_dir in sorted(group_dir.iterdir()):
-                if experiment_dir.is_dir():
-                    archives_info['library_experiments'].add(experiment_dir.name)
-
     # Convert sets to lists for JSON serialization
-    archives_info['archive_experiments'] = sorted(list(archives_info['archive_experiments']))
-    archives_info['library_experiments'] = sorted(list(archives_info['library_experiments']))
-    archives_info['experiments'] = list(archives_info['library_experiments'])
+    archives_info['experiments'] = sorted(list(archives_info['experiments']))
     archives_info['available_years'] = sorted(list(archives_info['available_years']))
     for year, year_data in archives_info['by_year'].items():
         year_data['experiments'] = sorted(list(year_data['experiments']))
@@ -255,23 +243,6 @@ def scan_archives():
         year_data['codes'] = year_codes
         if year_codes:
             archives_info['year_codes'][year] = year_codes[0]
-
-    # Determine academic year coverage range
-    year_pairs = []
-    for year in archives_info['available_years']:
-        if isinstance(year, str) and '-' in year:
-            parts = year.split('-')
-            try:
-                start = int(parts[0])
-                end = int(parts[1])
-                year_pairs.append((start, end))
-            except ValueError:
-                continue
-
-    if year_pairs:
-        start_year = min(pair[0] for pair in year_pairs)
-        end_year = max(pair[1] for pair in year_pairs)
-        archives_info['year_range'] = {'start': start_year, 'end': end_year}
 
     print(f"Total: {archives_info['total_archives']} archives")
     return archives_info
