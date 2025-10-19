@@ -139,7 +139,20 @@
         .section-header {
             margin-bottom: 30px;
         }
-        
+
+        .section-header.with-action {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .section-header-main {
+            flex: 1;
+            min-width: 240px;
+        }
+
         .section-title {
             font-size: 28px;
             color: var(--dark);
@@ -869,11 +882,14 @@
             
             <!-- History Section -->
             <section class="section" id="history">
-                <div class="section-header">
-                    <h2 class="section-title">Check History</h2>
-                    <p class="section-subtitle">View previous plagiarism checks</p>
+                <div class="section-header with-action">
+                    <div class="section-header-main">
+                        <h2 class="section-title">Check History</h2>
+                        <p class="section-subtitle">View previous plagiarism checks</p>
+                    </div>
+                    <button type="button" class="btn btn-danger admin-only" id="clearHistoryBtn" style="display: none;">🧹 Clear History</button>
                 </div>
-                
+
                 <div class="results-table">
                     <table>
                         <thead>
@@ -1925,7 +1941,34 @@
                 console.error('Load history error:', error);
             }
         }
-        
+
+        const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+        if (clearHistoryBtn) {
+            clearHistoryBtn.addEventListener('click', async () => {
+                if (!confirm('Clear the entire history for all users?')) {
+                    return;
+                }
+
+                const originalText = '🧹 Clear History';
+                clearHistoryBtn.disabled = true;
+                clearHistoryBtn.textContent = 'Clearing…';
+
+                try {
+                    const response = await fetch('/admin/history/clear', { method: 'POST' });
+                    const data = await response.json();
+                    if (!data.success) {
+                        throw new Error(data.message || 'Unable to clear history.');
+                    }
+                    loadHistory();
+                } catch (error) {
+                    alert(error.message || 'Unable to clear history.');
+                } finally {
+                    clearHistoryBtn.disabled = false;
+                    clearHistoryBtn.textContent = originalText;
+                }
+            });
+        }
+
         // Admin functions
         async function loadUsers() {
             try {

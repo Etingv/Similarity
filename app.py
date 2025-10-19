@@ -20,7 +20,7 @@ import sys
 import shutil
 import zipfile
 import re
-from typing import Optional
+from typing import Optional, Set
 from pathlib import Path
 
 app = Flask(__name__)
@@ -45,6 +45,32 @@ def ensure_environment_ready():
     Path('temp').mkdir(exist_ok=True)
     Path('reports').mkdir(exist_ok=True)
     archives_info = scan_archives()
+
+
+def collect_experiment_directories(submissions_dir: Path) -> Set[str]:
+    """Collect experiment names from first-level directories 1-4."""
+    experiments: Set[str] = set()
+    allowed_roots = {'1', '2', '3', '4'}
+
+    for root_name in allowed_roots:
+        root_path = submissions_dir / root_name
+        if not root_path.is_dir():
+            continue
+
+        try:
+            for child in root_path.iterdir():
+                if not child.is_dir():
+                    continue
+
+                name = child.name.strip()
+                if not name or name.startswith('.'):
+                    continue
+
+                experiments.add(name)
+        except PermissionError:
+            continue
+
+    return experiments
 
 class User(UserMixin):
     def __init__(self, id, username, role):
@@ -169,9 +195,12 @@ def scan_archives():
         print(f"Creating submissions directory: {submissions_dir}")
         submissions_dir.mkdir(exist_ok=True)
         return archives_info
-    
+
     print(f"Scanning archives in {submissions_dir}...")
-    
+
+    limited_experiments = collect_experiment_directories(submissions_dir)
+    use_limited_experiments = bool(limited_experiments)
+
     # Recursively find all .zip files
     for zip_path in submissions_dir.rglob('*.zip'):
         try:
@@ -235,6 +264,9 @@ def scan_archives():
             print(f"  Error processing {zip_path}: {e}")
     
     # Convert sets to lists for JSON serialization
+    if use_limited_experiments:
+        archives_info['experiments'] = limited_experiments
+
     archives_info['experiments'] = sorted(list(archives_info['experiments']))
     archives_info['available_years'] = sorted(list(archives_info['available_years']))
     for year, year_data in archives_info['by_year'].items():
@@ -743,6 +775,37 @@ def get_history():
     return jsonify({'success': True, 'history': history})
 
 # Admin routes
+@app.route('/admin/history/clear', methods=['POST'])
+@login_required
+def admin_clear_history():
+    """Clear entire check history (admin only)."""
+    if current_user.role != 'admin':
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+
+    conn = sqlite3.connect(app.config['DATABASE'])
+    c = conn.cursor()
+    c.execute("SELECT results_file FROM check_history WHERE results_file IS NOT NULL")
+    result_files = [row[0] for row in c.fetchall() if row and row[0]]
+    conn.close()
+
+    for file_path_str in result_files:
+        try:
+            file_path = Path(file_path_str)
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as e:
+            print(f"Warning: unable to delete results archive {file_path_str}: {e}")
+
+    conn = sqlite3.connect(app.config['DATABASE'])
+    c = conn.cursor()
+    c.execute("DELETE FROM check_history")
+    conn.commit()
+    conn.close()
+
+    check_progress.clear()
+
+    return jsonify({'success': True})
+
 @app.route('/admin/users')
 @login_required
 def get_users():
