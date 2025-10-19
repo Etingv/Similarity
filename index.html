@@ -1601,9 +1601,22 @@
         
         // Clear files
         document.getElementById('clearFilesBtn').addEventListener('click', async () => {
-            await fetch('/clear_uploads', { method: 'POST' });
-            uploadedFiles = [];
-            displayUploadedFiles();
+            try {
+                const response = await fetch('/clear_uploads', { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error('Failed to clear uploads');
+                }
+            } catch (error) {
+                console.error('Clear uploads error:', error);
+            } finally {
+                uploadedFiles = [];
+                pendingFile = null;
+                const fileInput = document.getElementById('fileInput');
+                if (fileInput) {
+                    fileInput.value = '';
+                }
+                displayUploadedFiles();
+            }
         });
         
         // Start check
