@@ -35,6 +35,16 @@ archives_info = {}
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+
+def ensure_environment_ready():
+    """Ensure database and working folders exist and preload archive info."""
+    global archives_info
+    init_db()
+    Path('uploads').mkdir(exist_ok=True)
+    Path('temp').mkdir(exist_ok=True)
+    Path('reports').mkdir(exist_ok=True)
+    archives_info = scan_archives()
+
 class User(UserMixin):
     def __init__(self, id, username, role):
         self.id = id
@@ -45,7 +55,7 @@ def init_db():
     """Initialize database"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    
+
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   username TEXT UNIQUE NOT NULL,
@@ -62,6 +72,18 @@ def init_db():
                   results_file TEXT,
                   status TEXT DEFAULT 'processing',
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+
+    # Ensure new columns exist for older installations
+    def ensure_column(table, column, definition):
+        c.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in c.fetchall()]
+        if column not in columns:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    ensure_column('check_history', 'parameters', 'TEXT')
+    ensure_column('check_history', 'results', 'TEXT')
+    ensure_column('check_history', 'results_file', 'TEXT')
+    ensure_column('check_history', 'status', "TEXT DEFAULT 'processing'")
     
     # Create default users
     c.execute("SELECT * FROM users WHERE username = 'admin'")
@@ -92,37 +114,41 @@ def load_user(user_id):
     return None
 
 def parse_archive_name(filename):
-    """Parse archive name to extract year, semester, and experiment"""
+    """Parse archive name to extract academic year, semester, and experiment."""
     result = {
         'valid': False,
         'academic_year': None,
         'semester': None,
         'experiment': None,
+        'year_code': None,
         'original': filename
     }
-    
-    # Pattern: YYYY.NN_experiment.zip or YYYZ.NN_experiment.zip
-    match = re.match(r'^(\d{4})\.(\d{2})_([^.]+)\.zip$', filename)
-    if match:
-        year_code = match.group(1)
-        semester = match.group(2)
-        experiment = match.group(3)
-        
-        # Determine academic year
-        if len(year_code) == 4:
-            if year_code.startswith('24'):  # e.g., 2425 -> 2024-2025
-                academic_year = f"20{year_code[:2]}-20{year_code[2:]}"
-            elif year_code.startswith('20'):  # e.g., 2024 -> 2024-2025
-                year_int = int(year_code)
-                academic_year = f"{year_int}-{year_int + 1}"
-            else:
-                academic_year = year_code
-        
-        result['valid'] = True
-        result['academic_year'] = academic_year
-        result['semester'] = semester
-        result['experiment'] = experiment
-    
+
+    match = re.match(r'^(\d{4})\.(\d{2})_([A-Za-z0-9\-]+(?:_[A-Za-z0-9\-]+)*)\.zip$', filename)
+    if not match:
+        return result
+
+    year_code = match.group(1)
+    semester = match.group(2)
+    experiment = match.group(3)
+
+    academic_year = None
+    if year_code.startswith('20'):
+        start_year = int(year_code)
+        academic_year = f"{start_year}-{start_year + 1}"
+    else:
+        # Interpret compact format like 2425 -> 2024-2025
+        start = int(f"20{year_code[:2]}")
+        end = int(f"20{year_code[2:]}")
+        academic_year = f"{start}-{end}"
+
+    result.update({
+        'valid': True,
+        'academic_year': academic_year,
+        'semester': semester,
+        'experiment': experiment,
+        'year_code': year_code
+    })
     return result
 
 def scan_archives():
@@ -131,8 +157,12 @@ def scan_archives():
     archives_info = {
         'total_archives': 0,
         'by_year': {},
-        'experiments': set(),
-        'archives': []
+        'archives': [],
+        'available_years': set(),
+        'year_codes': {},
+        'archive_experiments': set(),
+        'library_experiments': set(),
+        'year_range': None
     }
     
     submissions_dir = Path(app.config['ARCHIVES_DIR'])
@@ -152,6 +182,7 @@ def scan_archives():
             if parsed['valid']:
                 academic_year = parsed['academic_year']
                 experiment = parsed['experiment']
+                year_code = parsed['year_code']
             else:
                 # Try to extract year from filename
                 year_match = re.search(r'(\d{4})', archive_name)
@@ -161,31 +192,41 @@ def scan_archives():
                         academic_year = f"20{year[:2]}-20{year[2:]}"
                     else:
                         academic_year = f"{year}-{int(year)+1}"
+                    year_code = year
                 else:
                     academic_year = 'unknown'
-                
+                    year_code = None
+
                 # Extract experiment
                 exp_match = re.search(r'_([^.]+)\.', archive_name)
                 experiment = exp_match.group(1) if exp_match else 'unknown'
-            
+
             # Update statistics
             archives_info['total_archives'] += 1
-            archives_info['experiments'].add(experiment)
-            
+            archives_info['archive_experiments'].add(experiment)
+            if academic_year != 'unknown':
+                archives_info['available_years'].add(academic_year)
+
             if academic_year not in archives_info['by_year']:
                 archives_info['by_year'][academic_year] = {
                     'archives': 0,
-                    'experiments': set()
+                    'experiments': set(),
+                    'items': [],
+                    'codes': set()
                 }
-            
+
             archives_info['by_year'][academic_year]['archives'] += 1
             archives_info['by_year'][academic_year]['experiments'].add(experiment)
-            
+            archives_info['by_year'][academic_year]['items'].append(archive_name)
+            if year_code:
+                archives_info['by_year'][academic_year]['codes'].add(year_code)
+
             archives_info['archives'].append({
                 'path': str(zip_path.relative_to(submissions_dir)),
                 'name': archive_name,
                 'year': academic_year,
                 'experiment': experiment,
+                'year_code': year_code,
                 'size': zip_path.stat().st_size
             })
             
@@ -194,13 +235,49 @@ def scan_archives():
         except Exception as e:
             print(f"  Error processing {zip_path}: {e}")
     
+    # Build experiment catalog from library folders (submissions/1-4)
+    for group in range(1, 5):
+        group_dir = submissions_dir / str(group)
+        if group_dir.exists() and group_dir.is_dir():
+            for experiment_dir in sorted(group_dir.iterdir()):
+                if experiment_dir.is_dir():
+                    archives_info['library_experiments'].add(experiment_dir.name)
+
     # Convert sets to lists for JSON serialization
-    archives_info['experiments'] = list(archives_info['experiments'])
-    for year_data in archives_info['by_year'].values():
-        year_data['experiments'] = list(year_data['experiments'])
-    
+    archives_info['archive_experiments'] = sorted(list(archives_info['archive_experiments']))
+    archives_info['library_experiments'] = sorted(list(archives_info['library_experiments']))
+    archives_info['experiments'] = list(archives_info['library_experiments'])
+    archives_info['available_years'] = sorted(list(archives_info['available_years']))
+    for year, year_data in archives_info['by_year'].items():
+        year_data['experiments'] = sorted(list(year_data['experiments']))
+        year_data['items'].sort()
+        year_codes = sorted(list(year_data['codes']))
+        year_data['codes'] = year_codes
+        if year_codes:
+            archives_info['year_codes'][year] = year_codes[0]
+
+    # Determine academic year coverage range
+    year_pairs = []
+    for year in archives_info['available_years']:
+        if isinstance(year, str) and '-' in year:
+            parts = year.split('-')
+            try:
+                start = int(parts[0])
+                end = int(parts[1])
+                year_pairs.append((start, end))
+            except ValueError:
+                continue
+
+    if year_pairs:
+        start_year = min(pair[0] for pair in year_pairs)
+        end_year = max(pair[1] for pair in year_pairs)
+        archives_info['year_range'] = {'start': start_year, 'end': end_year}
+
     print(f"Total: {archives_info['total_archives']} archives")
     return archives_info
+
+# Prepare environment when the module is imported
+ensure_environment_ready()
 
 # Routes
 @app.route('/')
@@ -276,14 +353,17 @@ def validate_filename():
     """Validate archive filename format"""
     data = request.json
     filename = data.get('filename')
-    
+
     parsed = parse_archive_name(filename)
-    
+
     return jsonify({
         'success': True,
         'valid': parsed['valid'],
         'parsed': parsed,
-        'available_experiments': list(archives_info['experiments'])
+        'available_experiments': list(archives_info['experiments']),
+        'available_years': list(archives_info.get('available_years', [])),
+        'year_codes': archives_info.get('year_codes', {}),
+        'required_format': 'YYYY.SS_EXPERIMENT.zip'
     })
 
 @app.route('/upload', methods=['POST'])
@@ -402,6 +482,7 @@ def run_check_with_real_progress(check_id, user_id, parameters):
             submissions_dir.mkdir(exist_ok=True)
         
         # Copy uploaded files to submissions
+        new_archives = []
         if upload_dir.exists():
             for file in upload_dir.iterdir():
                 if file.suffix.lower() == '.zip':
@@ -409,7 +490,11 @@ def run_check_with_real_progress(check_id, user_id, parameters):
                     original_name = '_'.join(file.name.split('_')[2:])
                     dest = submissions_dir / original_name
                     shutil.copy2(file, dest)
+                    new_archives.append(original_name)
                     log_progress(15, f'File added: {original_name}', f'Copied to submissions folder')
+
+        if new_archives:
+            scan_archives()
         
         # Step 2: Create config file
         log_progress(20, 'Creating configuration...', 'Preparing config.ini')
@@ -623,7 +708,7 @@ def get_results(check_id):
     """Get check results"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    c.execute("SELECT results, status FROM check_history WHERE check_id = ? AND user_id = ?",
+    c.execute("SELECT results, status, results_file FROM check_history WHERE check_id = ? AND user_id = ?",
               (check_id, current_user.id))
     result = c.fetchone()
     conn.close()
@@ -633,7 +718,8 @@ def get_results(check_id):
         return jsonify({
             'success': True,
             'status': result[1],
-            'results': results_data
+            'results': results_data,
+            'results_available': bool(result[2])
         })
     
     return jsonify({'success': False}), 404
@@ -664,11 +750,11 @@ def get_history():
     """Get check history"""
     conn = sqlite3.connect(app.config['DATABASE'])
     c = conn.cursor()
-    c.execute("""SELECT check_id, filename, status, created_at, results 
-                 FROM check_history WHERE user_id = ? 
+    c.execute("""SELECT check_id, filename, status, created_at, results, results_file
+                 FROM check_history WHERE user_id = ?
                  ORDER BY created_at DESC LIMIT 20""",
               (current_user.id,))
-    
+
     history = []
     for row in c.fetchall():
         results = json.loads(row[4]) if row[4] else {}
@@ -677,7 +763,8 @@ def get_history():
             'filename': row[1],
             'status': row[2],
             'created_at': row[3],
-            'matches': results.get('total', 0)
+            'matches': results.get('total', 0),
+            'results_available': bool(row[5])
         })
     
     conn.close()
