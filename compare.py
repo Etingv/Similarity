@@ -274,7 +274,7 @@ def copy_to_report(attr, return_url_type='excel'):
         
     if return_url_type == 'excel':
         # excel-ready version
-        url = f'"=HYPERLINK( ""{link}"", ""{shortname}"")"'
+        url = f'=HYPERLINK("{link}","{shortname}")'
     else: # html type
         url = f'"file://{link}"'
     return url, new_file_path
@@ -305,10 +305,18 @@ def build_excel_sheet(rows):
         sheet_lines.append(f'<row r="{row_idx}">')
         for col_idx, cell in enumerate(row, start=1):
             cell_ref = f'{_column_letter(col_idx)}{row_idx}'
-            value = escape(str(cell))
-            sheet_lines.append(
-                f'<c r="{cell_ref}" t="inlineStr"><is><t>{value}</t></is></c>'
-            )
+            cell_str = str(cell)
+            if cell_str.startswith('='):
+                # This is a formula, don't escape it and use <f> tag
+                sheet_lines.append(
+                    f'<c r="{cell_ref}"><f>{cell_str}</f></c>'
+                )
+            else:
+                # Regular text value
+                value = escape(cell_str)
+                sheet_lines.append(
+                    f'<c r="{cell_ref}" t="inlineStr"><is><t>{value}</t></is></c>'
+                )
         sheet_lines.append('</row>')
 
     sheet_lines.extend(['</sheetData>', '</worksheet>'])
@@ -538,4 +546,3 @@ write_excel_report(report, report_folder)
 print(f'Done: see {report_folder}/report.txt')
 print(f'Excel version saved as {report_folder}/report.xlsx')
 print('Copy-Paste report.txt content to Excel table for interactive features.')
-
