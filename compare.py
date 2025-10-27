@@ -22,6 +22,7 @@ import pymupdf
 import codecs
 import datetime
 import zipfile, py7zr
+from xml.sax.saxutils import escape
 from time import mktime
 import difflib
 import numpy as np
@@ -254,7 +255,7 @@ print(f'THRESHOLD set automatically {THRESHOLD:0.2f}')
 print('Building report...')
 
 def copy_to_report(attr, return_url_type='excel'):
-    
+
     submission_id = attr['submission_id']
     student_name = attr['student_name']
     
@@ -277,6 +278,137 @@ def copy_to_report(attr, return_url_type='excel'):
     else: # html type
         url = f'"file://{link}"'
     return url, new_file_path
+
+
+#%% Excel report helper
+
+
+def _column_letter(idx):
+
+    letters = ''
+    while idx:
+        idx, remainder = divmod(idx - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def build_excel_sheet(rows):
+
+    sheet_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
+        '<sheetData>'
+    ]
+
+    for row_idx, row in enumerate(rows, start=1):
+        sheet_lines.append(f'<row r="{row_idx}">')
+        for col_idx, cell in enumerate(row, start=1):
+            cell_ref = f'{_column_letter(col_idx)}{row_idx}'
+            value = escape(str(cell))
+            sheet_lines.append(
+                f'<c r="{cell_ref}" t="inlineStr"><is><t>{value}</t></is></c>'
+            )
+        sheet_lines.append('</row>')
+
+    sheet_lines.extend(['</sheetData>', '</worksheet>'])
+    return '\n'.join(sheet_lines)
+
+
+def write_excel_report(report_text, destination_folder):
+
+    rows = []
+    for line in report_text.replace('\r\n', '\n').split('\n'):
+        rows.append(line.split('\t'))
+
+    sheet_xml = build_excel_sheet(rows)
+
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n'
+        '  <sheets>\n'
+        '    <sheet name="Report" sheetId="1" r:id="rId1"/>\n'
+        '  </sheets>\n'
+        '</workbook>'
+    )
+
+    workbook_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+        '  <Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>\n'
+        '  <Relationship Id="rId2" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" '
+        'Target="styles.xml"/>\n'
+        '</Relationships>'
+    )
+
+    styles_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">\n'
+        '  <fonts count="1">\n'
+        '    <font>\n'
+        '      <sz val="11"/>\n'
+        '      <color theme="1"/>\n'
+        '      <name val="Calibri"/>\n'
+        '      <family val="2"/>\n'
+        '    </font>\n'
+        '  </fonts>\n'
+        '  <fills count="1">\n'
+        '    <fill>\n'
+        '      <patternFill patternType="none"/>\n'
+        '    </fill>\n'
+        '  </fills>\n'
+        '  <borders count="1">\n'
+        '    <border/>\n'
+        '  </borders>\n'
+        '  <cellStyleXfs count="1">\n'
+        '    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>\n'
+        '  </cellStyleXfs>\n'
+        '  <cellXfs count="1">\n'
+        '    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>\n'
+        '  </cellXfs>\n'
+        '  <cellStyles count="1">\n'
+        '    <cellStyle name="Normal" xfId="0" builtinId="0"/>\n'
+        '  </cellStyles>\n'
+        '</styleSheet>'
+    )
+
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n'
+        '  <Default Extension="rels" '
+        'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n'
+        '  <Default Extension="xml" ContentType="application/xml"/>\n'
+        '  <Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>\n'
+        '  <Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>\n'
+        '  <Override PartName="/xl/styles.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>\n'
+        '</Types>'
+    )
+
+    root_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+        '  <Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>\n'
+        '</Relationships>'
+    )
+
+    excel_path = os.path.join(destination_folder, 'report.xlsx')
+
+    with zipfile.ZipFile(excel_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('[Content_Types].xml', content_types_xml)
+        zf.writestr('_rels/.rels', root_rels_xml)
+        zf.writestr('xl/workbook.xml', workbook_xml)
+        zf.writestr('xl/_rels/workbook.xml.rels', workbook_rels_xml)
+        zf.writestr('xl/styles.xml', styles_xml)
+        zf.writestr('xl/worksheets/sheet1.xml', sheet_xml)
 
 
 report = 'semester \t submission_id \t student_name \t when_submitted \t filename \t size_words \t num_figures\t\
@@ -399,8 +531,11 @@ report += f'HASH_DISTANCE_THRESHOLD = {HASH_DISTANCE_THRESHOLD}\n\n'
 
 
 with codecs.open(reportfilename, 'w', 'utf-8') as f:
-    f.write(report)          
+    f.write(report)
+
+write_excel_report(report, report_folder)
 
 print(f'Done: see {report_folder}/report.txt')
+print(f'Excel version saved as {report_folder}/report.xlsx')
 print('Copy-Paste report.txt content to Excel table for interactive features.')
 
