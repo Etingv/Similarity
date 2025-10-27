@@ -274,7 +274,7 @@ def copy_to_report(attr, return_url_type='excel'):
         
     if return_url_type == 'excel':
         # excel-ready version
-        url = f'=HYPERLINK("{link}","{shortname}")'
+        url = f'"=HYPERLINK( ""{link}"", ""{shortname}"")"'
     else: # html type
         url = f'"file://{link}"'
     return url, new_file_path
